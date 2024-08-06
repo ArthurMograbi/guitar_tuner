@@ -1,17 +1,10 @@
-'''
-Guitar tuner script based on the Harmonic Product Spectrum (HPS)
-
-MIT License
-Copyright (c) 2021 chciken
-'''
-
 import copy
 import os
 import numpy as np
 import scipy.fftpack
 import sounddevice as sd
 import time
-import pyautogui
+import matplotlib.pyplot as plt
 
 # General settings that can be changed by the user
 SAMPLE_FREQ = 48000 # sample frequency in Hz
@@ -29,8 +22,6 @@ OCTAVE_BANDS = [50, 100, 200, 400, 800, 1600, 3200, 6400, 12800, 25600]
 
 ALL_NOTES = ["A","A#","B","C","C#","D","D#","E","F","F#","G","G#"]
 
-
-
 def find_closest_note(pitch):
   """
   This function finds the closest note for a given pitch
@@ -43,14 +34,21 @@ def find_closest_note(pitch):
   i = int(np.round(np.log2(pitch/CONCERT_PITCH)*12))
   closest_note = ALL_NOTES[i%12] + str(4 + (i + 9) // 12)
   closest_pitch = CONCERT_PITCH*2**(i/12)
-  return closest_note, closest_pitch,i
+  return closest_note, closest_pitch, i
 
 HANN_WINDOW = np.hanning(WINDOW_SIZE)
-def callback(indata, frames, time, status):
+
+# List to store detected notes and their timestamps
+detected_notes = []
+timestamps = []
+
+def callback(indata, frames, callback_time, status):
   """
   Callback function of the InputStream method.
   That's where the magic happens ;)
   """
+  global start_time
+  
   # define static variables
   if not hasattr(callback, "window_samples"):
     callback.window_samples = [0 for _ in range(WINDOW_SIZE)]
@@ -75,7 +73,7 @@ def callback(indata, frames, time, status):
     hann_samples = callback.window_samples * HANN_WINDOW
     magnitude_spec = abs(scipy.fftpack.fft(hann_samples)[:len(hann_samples)//2])
 
-    # supress mains hum, set everything below 62Hz to zero
+    # suppress mains hum, set everything below 62Hz to zero
     for i in range(int(62/DELTA_FREQ)):
       magnitude_spec[i] = 0
 
@@ -108,7 +106,7 @@ def callback(indata, frames, time, status):
     max_freq = max_ind * (SAMPLE_FREQ/WINDOW_SIZE) / NUM_HPS
 
     closest_note, closest_pitch, note_int = find_closest_note(max_freq)
-    note_int+=29
+    note_int += 29
     max_freq = round(max_freq, 1)
     closest_pitch = round(closest_pitch, 1)
 
@@ -118,21 +116,38 @@ def callback(indata, frames, time, status):
     os.system('cls' if os.name=='nt' else 'clear')
     if callback.noteBuffer.count(callback.noteBuffer[0]) == len(callback.noteBuffer):
       print(f"Closest note: {closest_note}({note_int}) {max_freq}/{closest_pitch}")
-      if note_int>=0:
-        c = chr(ord('a')+note_int)
-        print(f"Typing {c}")
-        pyautogui.typewrite(c)
+      if note_int >= 0:
+        detected_notes.append(note_int)
+        timestamps.append(time.time() - start_time)  # Store relative time
     else:
       print(f"Closest note: ...")
-
   else:
     print('no input')
+
+def plot_notes(timestamps, detected_notes):
+  plt.figure(figsize=(10, 6))
+  plt.plot(timestamps, detected_notes, 'bo-')
+  plt.xlabel('Time (s)')
+  plt.ylabel('Notes')
+  plt.title('Detected Notes Over Time')
+  plt.grid(True)
+
+  # Map semitones to note names for y-axis labels
+  y_ticks = list(range(min(detected_notes), max(detected_notes)+1))
+  y_tick_labels = [ALL_NOTES[(i - 29) % 12] + str((i - 29) // 12 + 4) for i in y_ticks]
+  plt.yticks(y_ticks, y_tick_labels)
+  
+  plt.show()
 
 try:
   time.sleep(5)
   print("Starting HPS guitar tuner...")
+  start_time = time.time()
   with sd.InputStream(channels=1, callback=callback, blocksize=WINDOW_STEP, samplerate=SAMPLE_FREQ):
     while True:
-      time.sleep(0.5)
+      time.sleep(0.1)
+      if time.time() - start_time > 10:
+        break
+  plot_notes(timestamps, detected_notes)
 except Exception as exc:
   print(str(exc))
